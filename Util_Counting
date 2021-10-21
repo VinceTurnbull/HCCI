@@ -1,0 +1,60 @@
+with claims_table as(
+select *
+FROM "testdb"."vt_sample_claimants_adddsc")
+
+
+/*****************Inpatient ********************/
+add_IP_key as (
+select *
+, (case when major_service_category = 'Inpatient Facility' then  concat(cast(admit_date as varchar), member_ssn, dsc_with_hierarchy) 
+   else NULL end) as IP_unique_key
+from claims_table 
+),
+
+
+IP_Enc_Assignment as (
+select IP_unique_key
+, sum(allowed_amount) as allowed 
+, (case when (IP_unique_key in ('',' ') or IP_unique_key is NULL) then NULL
+when sum(allowed_amount) > 0 then 1 
+when sum(allowed_amount) < 0 then -1 
+else 0 end) as IP_enc_assignment
+from add_IP_key 
+group by 1),
+
+
+Rank_IP_Rows as (
+select * 
+, (row_number() over (partition by IP_unique_key ORDER BY allowed_amount desc) ) AS IP_ENC_ROW_RANK
+from add_IP_key
+where major_service_category = 'Inpatient Facility'),
+
+add_Enc_Service_Counts as (
+select a.*
+, (case when b.IP_enc_assignment = 1 then 1 else 0 end ) as Service_Count
+, (case when b.IP_enc_assignment = 1 then 1 else 0 end ) as Reversal_Flag
+from (
+select a.*
+, b.IP_enc_assignment as Encounter_Count
+from Rank_IP_Rows a
+left join IP_Enc_Assignment b
+on a.IP_unique_key = b.IP_unique_key
+and a.IP_ENC_ROW_RANK = 1) a
+left join IP_Enc_Assignment b
+on a.IP_unique_key = b.IP_unique_key )
+
+select major_service_category
+, dsc_with_hierarchy
+-- , drg_mdc_description
+, sum(allowed_amount) as allowed
+, sum(Encounter_Count) as enc_count
+, sum(service_count) as service_count
+, count(*) as row_count
+from add_Enc_Service_Counts
+where service_count > 0
+-- and drg_mdc_grouping = 'Diseases and disorders of the musculoskeletal system and connective tissue'
+group by 1,2
+order by 1,2
+
+
+
