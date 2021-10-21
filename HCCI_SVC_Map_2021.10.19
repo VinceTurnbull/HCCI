@@ -1,7 +1,6 @@
 
 /*
--- sample claims table to 100,000 claimants
-
+-- sample of 500,000 claimants
 
 with member_sample as (
 
@@ -19,8 +18,14 @@ random_sample as (
 select_random_members as (
   select *
   from random_sample
-  where rn <= 500000
-)
+  where rn <= 500000)
+  
+  
+ select *
+from analytics_dw.medical_claims
+where member_ssn in (select member_ssn from select_random_members)
+and year(service_from_date) = 2019
+
 
 
 -- Fix errors with service type field
