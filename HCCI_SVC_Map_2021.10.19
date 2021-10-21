@@ -18,14 +18,13 @@ random_sample as (
 select_random_members as (
   select *
   from random_sample
-  where rn <= 500000)
+  where rn <= 500000),
   
-  
- select *
+claims_sample as (
+select *
 from analytics_dw.medical_claims
 where member_ssn in (select member_ssn from select_random_members)
-and year(service_from_date) = 2019
-
+and year(service_from_date) = 2019),
 
 
 -- Fix errors with service type field
@@ -35,7 +34,11 @@ fix_service_type as (
    , (case when (a.procedure_code between 'J0000' and 'J9999') then 'Professional Services'
        when (a.drg not in ('', ' ') and drg is not NULL) then 'Inpatient Facility' 
       else a.service_type end ) as major_service_category
-  from claims_sample a),*/
+  from claims_sample a)
+  
+  
+  select * from fix_service_type
+  */
   
 with sample_data as (  
 SELECT *
@@ -62,7 +65,7 @@ map_IP_Fac as(
 Final_map_IP_Fac as(
   
   select a.*
- , (case when (a.major_service_category = 'Inpatient Facility' and (IP_DSC in('', ' ') or IP_DSC is null)) then 'Other'
+ , (case when (a.major_service_category = 'Inpatient Facility' and (IP_DSC in('', ' ') or IP_DSC is null)) then 'Medical'
   else IP_DSC end) as final_IP_DSC
   from map_IP_Fac a
 ),
