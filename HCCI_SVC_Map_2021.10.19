@@ -2,14 +2,26 @@
 /*
 -- sample claims table to 100,000 claimants
 
-with claims_sample as(
-select * 
+
+with member_sample as (
+
+select distinct member_ssn  
 from analytics_dw.medical_claims
-where member_ssn in (
-select distinct member_ssn
-from analytics_dw.medical_claims
-where year(service_from_date) = 2019
-limit 100000)),
+where year(service_from_date) = 2019),
+
+
+random_sample as (
+
+  select member_ssn 
+  , ROW_NUMBER() OVER (ORDER BY RANDOM())  as rn
+  from member_sample),
+
+select_random_members as (
+  select *
+  from random_sample
+  where rn <= 500000
+)
+
 
 -- Fix errors with service type field
 -- professional logic also assigns all J codes to professional and for some reason it looks like DRGs are getting mapped to prof
