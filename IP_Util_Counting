@@ -52,17 +52,3 @@ on a.IP_unique_key = b.IP_unique_key )
 
 
 
-select major_service_category
-, dsc_with_hierarchy
-, sum(allowed_amount) as allowed
-, sum(Encounter_Count) as enc_count
-, sum(service_count) as service_count
-, sum(COH_DAYS) as days
-, count(*) as row_count
-from add_Enc_Service_Counts
--- where service_count > 0
--- and drg_mdc_grouping = 'Diseases and disorders of the musculoskeletal system and connective tissue'
-group by 1,2
-order by 1,2
-
-
