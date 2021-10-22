@@ -4,6 +4,8 @@ FROM "testdb"."vt_sample_claimants_adddsc"),
 
 
 /*****************Inpatient ********************/
+
+-- Would like to revise to do without Admit_date in key
 add_IP_key as (
 select *
 , (case when major_service_category = 'Inpatient Facility' then  concat(cast(admit_date as varchar), member_ssn, dsc_with_hierarchy) 
