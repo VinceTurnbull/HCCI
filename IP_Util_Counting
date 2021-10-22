@@ -41,7 +41,8 @@ select a.*
    when b.IP_enc_assignment = -1 then -1
    else 0 end ) as Service_Count
 , (case when b.IP_enc_assignment = 1 then 1 else 0 end ) as Reversal_Flag
-, (case when a.Encounter_Count is not NULL then date_diff('day', a.COH_ADMIT_DATE ,a.COH_DISCHARGE_DATE ) 
+, (case when (a.Encounter_Count is not NULL and date_diff('day', a.COH_ADMIT_DATE ,a.COH_DISCHARGE_DATE ) = 0) then 1
+   when (a.Encounter_Count is not NULL and date_diff('day', a.COH_ADMIT_DATE ,a.COH_DISCHARGE_DATE ) > 0) then date_diff('day', a.COH_ADMIT_DATE ,a.COH_DISCHARGE_DATE )
    else NULL end) as COH_DAYS
 from (
 select a.*
