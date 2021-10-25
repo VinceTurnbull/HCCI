@@ -1,0 +1,55 @@
+with claims_table as(
+select *
+FROM "testdb"."vt_sample_claimants_adddsc" 
+  ),
+
+
+/*****************Professional ********************/
+add_Prof_key as (
+select *
+, (case when major_service_category = 'Professional Services' then  concat(cast(service_from_date as varchar), member_ssn, provider_tin, dsc_with_hierarchy) 
+   else NULL end) as Prof_unique_key
+from claims_table 
+),
+
+
+Prof_Enc_Assignment as (
+select Prof_unique_key
+, sum(allowed_amount) as allowed 
+, (case when (Prof_unique_key in ('',' ') or Prof_unique_key is NULL) then NULL
+when sum(allowed_amount) > 0 then 1 
+when sum(allowed_amount) < 0 then -1 
+else 0 end) as Prof_enc_assignment
+from add_Prof_key 
+group by 1),
+
+
+
+Rank_Prof_Rows as (
+select * 
+, (row_number() over (partition by Prof_unique_key ORDER BY service_from_date asc) ) AS Prof_ENC_ROW_RANK
+from add_Prof_key
+where major_service_category = 'Professional Services'),
+
+
+
+add_Enc_Service_Counts as (
+select a.*
+, (case when a.allowed_amount > 0 then 1
+   when a.allowed_amount < 0 -1 then -1
+   else 0 end ) as Service_Count
+, (case when b.Prof_enc_assignment = 1 then 1 else 0 end ) as Reversal_Flag
+from (
+
+select a.*
+, b.Prof_enc_assignment as Encounter_Count
+from Rank_Prof_Rows a
+left join Prof_Enc_Assignment b
+on a.Prof_unique_key = b.Prof_unique_key
+and a.Prof_ENC_ROW_RANK = 1
+  ) a
+left join Prof_Enc_Assignment b
+on a.Prof_unique_key = b.Prof_unique_key )
+
+
+
