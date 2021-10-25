@@ -41,6 +41,7 @@ from Rank_OP_Rows a
 left join OP_Enc_Assignment b
 on a.OP_unique_key = b.OP_unique_key
 and a.OP_ENC_ROW_RANK = 1
-and cast(a.op_fac_hiearchy_final as integer) <= 3) a
+-- and cast(a.op_fac_hiearchy_final as integer) <= 3
+  ) a
 left join OP_Enc_Assignment b
 on a.OP_unique_key = b.OP_unique_key )
