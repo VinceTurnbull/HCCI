@@ -1,3 +1,9 @@
+with claims_table as(
+select *
+FROM "testdb"."vt_sample_claimants_adddsc"
+  ),
+
+
 /*****************Outpatient ********************/
 add_OP_key as (
 select *
@@ -32,7 +38,6 @@ select a.*
    when a.allowed_amount < 0 -1 then -1
    else 0 end ) as Service_Count
 , (case when b.OP_enc_assignment = 1 then 1 else 0 end ) as Reversal_Flag
-, units 
 from (
 
 select a.*
@@ -45,3 +50,8 @@ and a.OP_ENC_ROW_RANK = 1
   ) a
 left join OP_Enc_Assignment b
 on a.OP_unique_key = b.OP_unique_key )
+
+
+
+
+
