@@ -1,0 +1,184 @@
+
+with sample_data as (  
+SELECT *
+from "testdb"."vt_sample_claimants" 
+) ,
+
+
+
+/********************************** Inpatient *****************************/
+
+-- initial map of IP Fac based on Code
+map_IP_Fac as(
+  
+  select a.*
+  , (case when a.pos in ('31','32','33') then 'SNF'
+     when a.pos in ('34') then 'Hospice'
+     else b.hcci_detailed_service_class end) as IP_DSC
+  , b.mdc_grouping as DRG_MDC_grouping
+  , b.description as DRG_MDC_description
+  from sample_data a
+  left join "testdb"."servicemapping_drgs" b
+  on a.drg = b.drg
+),
+
+-- clean up IP fac not labeled usually for DRG 999, ungroupable drgs
+map_ungroupable_IP_Fac as(
+  
+select a.*
+ , (case when (a.major_service_category = 'Inpatient Facility' and (IP_DSC in('', ' ') or IP_DSC is null)) then 'Medical'
+  else IP_DSC end) as IP_DSC_2
+  from map_IP_Fac a
+),
+
+
+-- add a IP key to be used for date logic and IP subcategory (for identifying acute vs. non-acute)
+Add_IP_key as (
+
+select * 
+, (case when major_service_category = 'Inpatient Facility' then  concat(cast(admit_date as varchar), member_ssn, IP_DSC_2) 
+   else NULL end) as unique_key_IP
+, (case when IP_DSC_2 = 'SNF' then 'SNF'
+   when IP_DSC_2 = 'Hospice' then 'Hospice'
+   when (major_service_category = 'Inpatient Facility' and IP_DSC_2 not in ('SNF', 'Hospice')) then 'IP Acute'
+   else NULL end) as IP_subcategory
+  from map_ungroupable_IP_Fac),
+   
+-- add discharge and admit date; setting admit date as min svc date and dis as max service date for a unique key
+-- will edit and group in next steps to combine contiguous claims
+-- 
+add_Admit_discharge as (
+select *
+, ( case when major_service_category = 'Inpatient Facility' then min(service_from_date) over (partition by unique_key_IP )
+  else service_from_date end) AS COH_ADMIT_DATE
+, (case when major_service_category = 'Inpatient Facility' then max(service_to_date) over (partition by unique_key_IP )
+  else service_from_date end) AS COH_DISCHARGE_DATE
+from add_IP_key
+  ),
+
+/********************* Regrouping overlapping IP admits***************/
+-- Lag Admits to find overlapping admit dates by IP subcategory
+
+group_IP_admits_1 as (
+select b.*
+, date_diff('day', cast(b.prev_discharge as date), cast( b.COH_ADMIT_DATE as date)) as lag_diff
+
+from (
+select a.*
+, lag(a.coh_discharge_date,1) over (partition by a.member_ssn, a.IP_subcategory order by a.COH_ADMIT_DATE, a.unique_key_IP) as prev_discharge
+, lag(a.coh_admit_date,1) over (partition by a.member_ssn, a.IP_subcategory order by  a.COH_ADMIT_DATE, a.unique_key_IP) as prev_admit
+, lag(a.IP_DSC_2,1) over (partition by a.member_ssn, a.IP_subcategory order by  a.COH_ADMIT_DATE, a.unique_key_IP) as prev_IP_DSC
+, lag(a.unique_key_IP,1) over (partition by a.member_ssn, a.IP_subcategory order by  a.COH_ADMIT_DATE, a.unique_key_IP) as prev_unique_key_IP
+from (
+
+select unique_key_IP
+, member_ssn
+, major_service_category
+, COH_ADMIT_DATE
+, COH_DISCHARGE_DATE
+, IP_DSC_2
+, IP_subcategory
+from add_Admit_discharge 
+where major_service_category = 'Inpatient Facility'
+ group by 1,2,3,4,5,6,7) a
+  ) b),
+  
+
+  
+  -- Identify starts of new admits (non-overlapping)
+
+new_admits as (
+  select member_ssn
+  , major_service_category
+  , COH_ADMIT_DATE
+  , COH_DISCHARGE_DATE
+  , IP_DSC_2
+  , IP_subcategory
+  , lag_diff
+  , (row_number() over (partition by a.member_ssn, a.IP_subcategory ORDER BY a.COH_ADMIT_DATE asc) ) AS ADMIT_ROW_RANK
+  from group_IP_admits_1 a
+  where (a.lag_diff > 0 or a.lag_diff is NULL )),
+  
+ 
+
+-- add admit window to identify start of next non-overlapping admit 
+admit_window as (  
+select * 
+  , (case when window is NULL and admit_row_rank = 1 then date '2100-12-31'
+     when (last_admit_counter = ADMIT_ROW_RANK) and window is NULL then date '2100-12-31'
+    else window end) as overlapping_admit_window_end
+from (
+  
+  select a.* 
+ , (max(a.ADMIT_ROW_RANK) over(partition by a.member_ssn, a.IP_subcategory)) as last_admit_counter
+ , b.coh_admit_date as window
+ from new_admits a
+ left join new_admits b
+ on a.member_ssn = b.member_ssn 
+ and a.IP_subcategory = b.IP_subcategory
+ and b.admit_row_rank = (a.admit_row_rank + 1)
+  )),
+ 
+ 
+join_admit_edits as( 
+select a.*
+, b.ADMIT_ROW_RANK 
+, b.overlapping_admit_window_end as overlapping_admit_window_end_window
+, b.coh_admit_date as edit_COH_ADMIT_DATE
+, b.IP_DSC_2 as edit_IP_DSC
+from group_IP_admits_1 a
+left join admit_window b
+on a.member_ssn = b.member_ssn
+and a.IP_subcategory = b.IP_subcategory
+and a.COH_DISCHARGE_DATE < b.overlapping_admit_window_end
+order by a.member_ssn, a.COH_ADMIT_DATE),
+
+
+-- dedup using filter, drop NULL unique keys
+dedup_IP_admits as (
+select * from (
+select a.*
+, min(a.ADMIT_ROW_RANK) over (partition by a.member_ssn, a.IP_subcategory, a.COH_ADMIT_DATE, a.COH_DISCHARGE_DATE) as FILTER_ROW_RANK
+, concat(cast(edit_COH_ADMIT_DATE as varchar), member_ssn, edit_IP_DSC) as edit_unique_key_IP
+from join_admit_edits a)
+where ((FILTER_ROW_RANK = ADMIT_ROW_RANK) or ADMIT_ROW_RANK is NULL)
+and unique_key_IP is not NULL
+order by member_ssn, COH_ADMIT_DATE),
+
+-- edit to discharge date using new unique key
+edit_discharge_date as (
+select * 
+, max(COH_DISCHARGE_DATE) over (partition by edit_unique_key_IP) as edit_COH_DISCHARGE_DATE
+from dedup_IP_admits),
+
+
+-- join back to claims
+join_IP_edits as(
+select a.*
+, b.edit_unique_key_IP
+, b.edit_COH_ADMIT_DATE
+, b.edit_COH_DISCHARGE_DATE
+, b.edit_IP_DSC 
+from add_Admit_discharge a
+left join edit_discharge_date b
+on a.unique_key_IP = b.unique_key_IP)
+
+select * from join_IP_edits limit 100
+
+
+
+
+  
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
+   
