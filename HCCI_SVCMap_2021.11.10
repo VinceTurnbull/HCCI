@@ -445,7 +445,9 @@ final_table as (
 , DSC_With_Hierarchy
 from map_Final_DSC)
 
+/******************* testing, replace as needed***********/
 
+-- test claims, replace with export to wherever
 select major_service_category
 , DSC_with_Hierarchy
 , sum(allowed_amount) as claims
