@@ -1,8 +1,14 @@
 with sample_data as (  
 SELECT *
 from "testdb"."vt_sample_claimants" 
-where major_service_category = 'Inpatient Facility'
 ) ,
+
+
+/************* Major Service Categories ****************/
+-- Logic to edit major service categories goes here 
+-- Right now this is mapped under Cohere's service type field, but there are some edits that need to be made to that logic to fix how J codes are classfied and figure out why some services with DRGS are being labeled as Professional
+
+
 
 
 /********************************** Inpatient *****************************/
@@ -21,7 +27,7 @@ map_IP_Fac as(
   on a.drg = b.drg
 ),
 
--- clean up IP fac not labeled usually for DRG 999, ungroupable drgs
+-- clean up IP fac not labeled usually for DRG 999, ungroupable drgs, about .5% of claims
 map_ungroupable_IP_Fac as(
   
 select a.*
@@ -154,7 +160,7 @@ from dedup_IP_admits),
 
 
 -- join back to claims
-join_IP_edits as(
+Final_map_IP_Fac as(
 select a.*
 , (case 
    when a.major_service_category = 'Inpatient Facility' and a.unique_key_IP is NULL then a.unique_key_IP
@@ -179,7 +185,282 @@ select a.*
 
 from add_Admit_discharge a
 left join edit_discharge_date b
-on a.unique_key_IP = b.unique_key_IP)
+on a.unique_key_IP = b.unique_key_IP),
+
+
+/********************************** Professional *****************************/
+-- add professional
+
+Add_prof_service_cat as(
+    select a.*
+     ,  (case when a.major_service_category = 'Professional Services' 
+             then b.subcategory else NULL end) as Prof_DSC
+  from Final_map_IP_Fac a
+  left join"testdb"."servicemapping_profprocs"  b
+  on a.procedure_code = b.code),
+  
+-- clean up Prof not labeled (all codes not on the mapping)
+Final_map_prof_service_cat as (
+
+  select a.*
+  , (case when (a.major_service_category = 'Professional Services' and (Prof_DSC in('', ' ') or Prof_DSC is null)) then 'Other'
+     else Prof_DSC end) as final_Prof_DSC
+     from Add_prof_service_cat a
+     ),
+
+-- add unique key for date logic
+add_Prof_key as (
+select *
+, (case when major_service_category = 'Professional Services' then  concat(cast(service_from_date as varchar), member_ssn, provider_tin, final_Prof_DSC) 
+   else NULL end) as unique_key_prof
+from Final_map_prof_service_cat 
+),
+
+
+
+/********************************** Outpatient *****************************/
+-- Add OP facility 
+ 
+Add_OP_Fac_Rev as (
+    select a.*
+  , (case when a.major_service_category = 'Outpatient Facility' then
+     b.hcci_detailed_servicecategory else NULL end) as OP_DSC_rev
+  
+  , (case when a.major_service_category = 'Outpatient Facility' then
+     b.subcategory else NULL end) as OP_Fac_subcategory_rev
+
+  , (case when a.major_service_category = 'Outpatient Facility' then
+     b.rank else NULL end) as OP_Fac_Rank_rev
+
+  from add_Prof_key a
+  left join "testdb"."servicemapping_revcodes" b
+  on a.revenue_code = b.rev_code),
+
+-- HCCI OP fac mapping on proc codes
+Add_OP_Fac_Proc as (
+    select a.*
+  , (case when (a.major_service_category = 'Outpatient Facility' and (OP_DSC_rev not in('', ' ') or OP_DSC_rev is null)) then OP_DSC_rev
+     when (a.major_service_category = 'Outpatient Facility' and (OP_DSC_rev in('', ' ') or OP_DSC_rev is null) and a.pos = '12') then 'Home Health' 
+     when (a.major_service_category = 'Outpatient Facility' and (OP_DSC_rev in('', ' ') or OP_DSC_rev is null) and a.pos = '23') then 'Emergency Room' 
+     when (a.major_service_category = 'Outpatient Facility' and (OP_DSC_rev in('', ' ') or OP_DSC_rev is null) and a.procedure_code in 
+           (select code from "testdb"."servicemapping_opfac_proccodes" )) then b.detailed_service_category
+     else 'Outpatient Other' end) as OP_DSC_proc
+     
+     
+     
+  , (case when (a.major_service_category = 'Outpatient Facility' and (OP_DSC_rev not in('', ' ') or OP_DSC_rev is null)) then OP_Fac_subcategory_rev
+     when (a.major_service_category = 'Outpatient Facility' and (OP_DSC_rev in('', ' ') or OP_DSC_rev is null) and a.pos = '12') then 'Other' 
+     when (a.major_service_category = 'Outpatient Facility' and (OP_DSC_rev in('', ' ') or OP_DSC_rev is null) and a.pos = '23') then 'Visits' 
+     when (a.major_service_category = 'Outpatient Facility' and (OP_DSC_rev in('', ' ') or OP_DSC_rev is null) and a.procedure_code in 
+           (select code from "testdb"."servicemapping_opfac_proccodes" )) then b.subcategory
+     else 'Other' end) as OP_Fac_subcategory_proc
+
+     
+  -- note, mapping "other" to last rank
+  
+  , (case when (a.major_service_category = 'Outpatient Facility' and (OP_DSC_rev not in('', ' ') or OP_DSC_rev is null)) then OP_Fac_Rank_rev
+     when (a.major_service_category = 'Outpatient Facility' and (OP_DSC_rev in('', ' ') or OP_DSC_rev is null) and a.pos = '12') then '9' 
+     when (a.major_service_category = 'Outpatient Facility' and (OP_DSC_rev in('', ' ') or OP_DSC_rev is null) and a.pos = '23') then '1' 
+     when (a.major_service_category = 'Outpatient Facility' and (OP_DSC_rev in('', ' ') or OP_DSC_rev is null) and a.procedure_code in 
+           (select code from "testdb"."servicemapping_opfac_proccodes" )) then b.hierarchy
+     else '10' end) as OP_Fac_hiearchy
+  
+  -- add unique key to join hierarchy back to
+  , concat(member_ssn, cast(service_from_date as varchar)) as unique_key_OP_hierachy
+    
+  from Add_OP_Fac_Rev a
+  left join "testdb"."servicemapping_opfac_proccodes" b
+  on a.procedure_code = b.code),
+
+
+-- OP Hierarchy
+OP_Hierarchy as (
+select * 
+  , (case when Top_OP_Rank = 1 then 'Emergency Room'
+  when Top_OP_Rank = 2 then 'Outpatient Surgery'
+  when Top_OP_Rank = 3 then 'Observation'
+  else NULL end) as Top_OP_DSC
+  from (
+select unique_key_OP_hierachy
+, min(OP_Fac_hiearchy) over(Partition by unique_key_OP_hierachy) as Top_OP_Rank
+from (
+select member_ssn
+,(case when major_service_category = 'Outpatient Facility' then OP_DSC_proc
+ when major_service_category = 'Inpatient Facility' then final_IP_DSC
+ else final_Prof_DSC end) as DSC_No_Hierarchy
+, unique_key_OP_hierachy
+, cast(OP_Fac_hiearchy as integer) as OP_Fac_hiearchy
+from Add_OP_Fac_Proc 
+where major_service_category = 'Outpatient Facility'
+and OP_Fac_subcategory_proc = 'Visits'))
+group by 1,2
+),
+
+-- edit the OP fac rank and DSC
+add_edit_OP_fac_rank as(
+select a.*
+, (case when a.OP_Fac_hiearchy_edit is NULL then a.OP_Fac_hiearchy 
+   else a.OP_Fac_hiearchy_edit end ) as OP_Fac_hiearchy_final
+
+, (case when a.OP_Fac_DSC_edit is NULL then a.OP_DSC_proc
+   else a.OP_Fac_DSC_edit end ) as OP_Fac_DSC_final
+
+  
+from (
+
+select a.*
+, (case when a.major_service_category = 'Outpatient Facility' then cast(b.Top_OP_Rank as varchar)
+   else NULL end) as OP_Fac_hiearchy_edit
+
+, (case when a.major_service_category = 'Outpatient Facility' then b.Top_OP_DSC 
+   else NULL end) as OP_Fac_DSC_edit
+
+    
+from Add_OP_Fac_Proc a
+left join OP_Hierarchy b 
+on a.unique_key_OP_hierachy = b.unique_key_OP_hierachy) a),
+
+
+  
+-- Final DSC
+map_Final_DSC as(
+select a.* 
+
+, (case when a.major_service_category = 'Outpatient Facility' then a.OP_DSC_proc
+when a.major_service_category = 'Inpatient Facility' then a.final_IP_DSC
+else a.final_Prof_DSC end) as DSC_No_Hierarchy
+  
+  
+, (case when a.major_service_category = 'Outpatient Facility' then a.OP_Fac_DSC_final
+when a.major_service_category = 'Inpatient Facility' then a.final_IP_DSC
+else a.final_Prof_DSC end) as DSC_With_Hierarchy
+  
+from add_edit_OP_fac_rank a),
+
+
+
+/*************** Cleanup and consolidate things**************/
+-- edit admit and discharges
+-- consolidate unique keys
+-- drop the fields not needed
+
+final_table as (
+  
+  select platform_code
+, product_id
+, plan_id
+, claim_id
+, claim_line_id
+, claim_line_suffix
+, member_id
+, member_key
+, member_ssn
+, member_age
+, network_id
+, network_flag
+, revenue_code
+, drg
+, discharge_status
+, referring_provider_key
+, referring_provider_npi
+, rendering_provider_key
+, rendering_provider_npi
+, billing_provider_npi
+, pay_to_provider_npi
+, attending_provider_npi
+, operating_physician_provider_npi
+, provider_tin
+, facility_npi
+, admitting_diagnosis_code
+, diagnosis_code1
+, diagnosis_code2
+, diagnosis_code3
+, diagnosis_code4
+, diagnosis_code5
+, diagnosis_code6
+, diagnosis_code7
+, diagnosis_code8
+, diagnosis_code9
+, diagnosis_code10
+, icd_version
+, bill_type
+, procedure_code
+, procedure_code_modifier
+, hcpcs_cpt4_suffix_cd_1
+, hcpcs_cpt4_type_cd_1
+, procedure_code_modifier2
+, procedure_code_modifier3
+, procedure_code_modifier4
+, pos
+, ndc
+, icd_procedure_code_1
+, icd_procedure_code_2
+, icd_procedure_code_3
+, auth_number
+, diagnosis_codes
+, icd_procedure_codes
+, cpt_modifier_codes
+, admit_date
+, discharge_date
+, service_from_date
+, service_to_date
+, paid_date
+, claim_received_date
+, billed_amount
+, allowed_amount
+, member_amount
+, paid_amount
+, copay
+, coinsurance
+, deductible
+, cob_amount
+, units
+, service_type
+, lob
+, is38states
+, payor
+, file_name
+, run_date
+, pal_category
+, major_service_category
+, DRG_MDC_grouping
+, DRG_MDC_description
+, OP_Fac_hiearchy_final
+, (case 
+   when major_service_category = 'Inpatient Facility' then final_unique_key_IP
+   when major_service_category = 'Professional Services' then unique_key_prof
+   when major_service_category = 'Outpatient Facility' then concat(cast(service_from_date as varchar), member_ssn, provider_tin, dsc_with_hierarchy)
+   else NULL end) as unique_key
+, (case 
+   when major_service_category = 'Inpatient Facility' then final_COH_ADMIT_DATE
+   when major_service_category = 'Professional Services' then NULL
+   when major_service_category = 'Outpatient Facility' then service_from_date
+   else NULL end) as COH_ADMIT_DATE
+, (case 
+   when major_service_category = 'Inpatient Facility' then final_COH_DISCHARGE_DATE
+   when major_service_category = 'Professional Services' then NULL
+   when major_service_category = 'Outpatient Facility' then service_to_date
+   else NULL end) as COH_DISCHARGE_DATE
+, DSC_No_Hierarchy
+, DSC_With_Hierarchy
+from map_Final_DSC)
+
+
+select major_service_category
+, DSC_with_Hierarchy
+, sum(allowed_amount) as claims
+from final_table
+group by 1,2
+order by 1,2
+                                                        
+   
+ 
+
+  
+
+
+
+
 
 
 
