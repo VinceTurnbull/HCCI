@@ -1,9 +1,7 @@
-
 with sample_data as (  
 SELECT *
 from "testdb"."vt_sample_claimants" 
 ) ,
-
 
 
 /********************************** Inpatient *****************************/
@@ -44,6 +42,7 @@ select *
    else NULL end) as IP_subcategory
   from map_ungroupable_IP_Fac),
    
+   
 -- add discharge and admit date; setting admit date as min svc date and dis as max service date for a unique key
 -- will edit and group in next steps to combine contiguous claims
 -- 
@@ -82,6 +81,7 @@ from add_Admit_discharge
 where major_service_category = 'Inpatient Facility'
  group by 1,2,3,4,5,6,7) a
   ) b),
+  
   
 
   
@@ -155,30 +155,29 @@ from dedup_IP_admits),
 -- join back to claims
 join_IP_edits as(
 select a.*
-, b.edit_unique_key_IP
-, b.edit_COH_ADMIT_DATE
-, b.edit_COH_DISCHARGE_DATE
-, b.edit_IP_DSC 
+, (case 
+   when major_service_category = 'Inpatient Facility' and unique_key_IP is NULL then a.unique_key_IP
+   when major_service_category = 'Inpatient Facility' and unique_key_IP is not NULL then b.edit_unique_key_IP
+  else NULL end) as final_unique_key_IP
+
+, (case 
+   when major_service_category = 'Inpatient Facility' and unique_key_IP is NULL then a.COH_ADMIT_DATE
+   when major_service_category = 'Inpatient Facility' and unique_key_IP is not NULL then b.edit_COH_ADMIT_DATE
+  else NULL end) as final_COH_ADMIT_DATE
+
+, (case 
+   when major_service_category = 'Inpatient Facility' and unique_key_IP is NULL then a.COH_DISCHARGE_DATE
+   when major_service_category = 'Inpatient Facility' and unique_key_IP is not NULL then b.edit_COH_DISCHARGE_DATE
+  else NULL end) as final_COH_DISCHARGE_DATE
+
+, (case 
+   when major_service_category = 'Inpatient Facility' and unique_key_IP is NULL then a.IP_DSC_2
+   when major_service_category = 'Inpatient Facility' and unique_key_IP is not NULL then  b.edit_IP_DSC 
+  else NULL end) as final_IP_DSC
+
+
 from add_Admit_discharge a
 left join edit_discharge_date b
 on a.unique_key_IP = b.unique_key_IP)
 
 select * from join_IP_edits limit 100
-
-
-
-
-  
-   
-   
-   
-   
-   
-   
-   
-   
-   
-   
-   
-   
-   
