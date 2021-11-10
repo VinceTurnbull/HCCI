@@ -1,6 +1,7 @@
 with sample_data as (  
 SELECT *
 from "testdb"."vt_sample_claimants" 
+where major_service_category = 'Inpatient Facility'
 ) ,
 
 
@@ -156,23 +157,23 @@ from dedup_IP_admits),
 join_IP_edits as(
 select a.*
 , (case 
-   when major_service_category = 'Inpatient Facility' and unique_key_IP is NULL then a.unique_key_IP
-   when major_service_category = 'Inpatient Facility' and unique_key_IP is not NULL then b.edit_unique_key_IP
+   when a.major_service_category = 'Inpatient Facility' and a.unique_key_IP is NULL then a.unique_key_IP
+   when a.major_service_category = 'Inpatient Facility' and a.unique_key_IP is not NULL then b.edit_unique_key_IP
   else NULL end) as final_unique_key_IP
 
 , (case 
-   when major_service_category = 'Inpatient Facility' and unique_key_IP is NULL then a.COH_ADMIT_DATE
-   when major_service_category = 'Inpatient Facility' and unique_key_IP is not NULL then b.edit_COH_ADMIT_DATE
+   when a.major_service_category = 'Inpatient Facility' and a.unique_key_IP is NULL then a.COH_ADMIT_DATE
+   when a.major_service_category = 'Inpatient Facility' and a.unique_key_IP is not NULL then b.edit_COH_ADMIT_DATE
   else NULL end) as final_COH_ADMIT_DATE
 
 , (case 
-   when major_service_category = 'Inpatient Facility' and unique_key_IP is NULL then a.COH_DISCHARGE_DATE
-   when major_service_category = 'Inpatient Facility' and unique_key_IP is not NULL then b.edit_COH_DISCHARGE_DATE
+   when a.major_service_category = 'Inpatient Facility' and a.unique_key_IP is NULL then a.COH_DISCHARGE_DATE
+   when a.major_service_category = 'Inpatient Facility' and a.unique_key_IP is not NULL then b.edit_COH_DISCHARGE_DATE
   else NULL end) as final_COH_DISCHARGE_DATE
 
 , (case 
-   when major_service_category = 'Inpatient Facility' and unique_key_IP is NULL then a.IP_DSC_2
-   when major_service_category = 'Inpatient Facility' and unique_key_IP is not NULL then  b.edit_IP_DSC 
+   when a.major_service_category = 'Inpatient Facility' and a.unique_key_IP is NULL then a.IP_DSC_2
+   when a.major_service_category = 'Inpatient Facility' and a.unique_key_IP is not NULL then  b.edit_IP_DSC 
   else NULL end) as final_IP_DSC
 
 
@@ -180,4 +181,8 @@ from add_Admit_discharge a
 left join edit_discharge_date b
 on a.unique_key_IP = b.unique_key_IP)
 
-select * from join_IP_edits limit 100
+
+
+
+
+
