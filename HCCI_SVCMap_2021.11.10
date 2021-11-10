@@ -1,6 +1,6 @@
 with sample_data as (  
 SELECT *
-from "testdb"."vt_sample_claimants" 
+from "testdb"."vt_sample_claimants_75kmbrs"
 ) ,
 
 
