@@ -1,0 +1,152 @@
+CREATE TABLE IF NOT EXISTS "testdb"."vt_sample_claimants_75kmbrs_add_utilCounting"   AS
+
+
+with claims_table as(
+select *
+FROM "testdb"."vt_sample_claimants_75kmbrs_adddsc" 
+  ),
+
+
+/*****************Inpatient ********************/
+
+IP_Enc_Assignment as (
+select unique_key
+, sum(allowed_amount) as allowed 
+, (case when (unique_key in ('',' ') or unique_key is NULL) then NULL
+when sum(allowed_amount) > 0 then 1 
+when sum(allowed_amount) < 0 then -1 
+else 0 end) as IP_enc_assignment
+from claims_table 
+group by 1),
+
+
+Rank_IP_Rows as (
+select * 
+, (row_number() over (partition by unique_key ORDER BY service_from_date asc) ) AS ENC_ROW_RANK
+from claims_table
+where major_service_category = 'Inpatient Facility'),
+
+
+IP_add_Enc_Service_Counts as (
+select a.*
+, (case when b.IP_enc_assignment = 1 then 1
+   when b.IP_enc_assignment = -1 then -1
+   else 0 end ) as Service_Count
+, (case when b.IP_enc_assignment = 1 then 1 else 0 end ) as Reversal_Flag
+, (case when (a.Encounter_Count is not NULL and date_diff('day', a.COH_ADMIT_DATE ,a.COH_DISCHARGE_DATE ) = 0) then 1
+   when (a.Encounter_Count is not NULL and date_diff('day', a.COH_ADMIT_DATE ,a.COH_DISCHARGE_DATE ) > 0) then date_diff('day', a.COH_ADMIT_DATE ,a.COH_DISCHARGE_DATE )
+   else NULL end) as COH_DAYS
+from (
+select a.*
+, b.IP_enc_assignment as Encounter_Count
+from Rank_IP_Rows a
+left join IP_Enc_Assignment b
+on a.unique_key = b.unique_key
+and a.ENC_ROW_RANK = 1) a
+left join IP_Enc_Assignment b
+on a.unique_key = b.unique_key ),
+
+
+/*****************Outpatient ********************/
+OP_Enc_Assignment as (
+select unique_key
+, sum(allowed_amount) as allowed 
+, (case when (unique_key in ('',' ') or unique_key is NULL) then NULL
+when sum(allowed_amount) > 0 then 1 
+when sum(allowed_amount) < 0 then -1 
+else 0 end) as OP_enc_assignment
+from claims_table 
+group by 1),
+
+
+Rank_OP_Rows as (
+select * 
+, (row_number() over (partition by unique_key ORDER BY service_from_date asc) ) AS ENC_ROW_RANK
+from claims_table
+where major_service_category = 'Outpatient Facility'),
+
+
+OP_add_Enc_Service_Counts as (
+select a.*
+, (case when a.allowed_amount > 0 then 1
+   when a.allowed_amount < 0 -1 then -1
+   else 0 end ) as Service_Count
+, (case when b.OP_enc_assignment = 1 then 1 else 0 end ) as Reversal_Flag
+, NULL as COH_DAYS
+from (
+
+select a.*
+, b.OP_enc_assignment as Encounter_Count
+from Rank_OP_Rows a
+left join OP_Enc_Assignment b
+on a.unique_key = b.unique_key
+and a.ENC_ROW_RANK = 1
+-- and cast(a.op_fac_hiearchy_final as integer) <= 3
+  ) a
+left join OP_Enc_Assignment b
+on a.unique_key = b.unique_key ),
+
+
+
+
+/*****************Professional ********************/
+Prof_Enc_Assignment as (
+select unique_key
+, sum(allowed_amount) as allowed 
+, (case when (unique_key in ('',' ') or unique_key is NULL) then NULL
+when sum(allowed_amount) > 0 then 1 
+when sum(allowed_amount) < 0 then -1 
+else 0 end) as Prof_enc_assignment
+from claims_table 
+group by 1),
+
+
+Rank_Prof_Rows as (
+select * 
+, (row_number() over (partition by unique_key ORDER BY service_from_date asc) ) AS ENC_ROW_RANK
+from claims_table
+where major_service_category = 'Professional Services'),
+
+
+
+Prof_add_Enc_Service_Counts as (
+select a.*
+, (case when a.allowed_amount > 0 then 1
+   when a.allowed_amount < 0 -1 then -1
+   else 0 end ) as Service_Count
+, (case when b.Prof_enc_assignment = 1 then 1 else 0 end ) as Reversal_Flag
+, NULL as COH_DAYS  
+from (
+
+select a.*
+, b.Prof_enc_assignment as Encounter_Count
+from Rank_Prof_Rows a
+left join Prof_Enc_Assignment b
+on a.unique_key = b.unique_key
+and a.ENC_ROW_RANK = 1
+  ) a
+left join Prof_Enc_Assignment b
+on a.unique_key = b.unique_key ),
+
+Combine_Tables as (
+  select * from IP_add_Enc_Service_Counts
+  UNION ALL
+
+  select * from OP_add_Enc_Service_Counts
+  UNION ALL
+  
+  select * from Prof_add_Enc_Service_Counts
+)
+
+
+-- Final Rules for select the type of utilization counting by service category
+select a.*
+, (case when major_service_category = 'Professional Services' then a.Service_Count
+   when major_service_category = 'Inpatient Facility' then a.Encounter_Count
+   when (major_service_category =  'Outpatient Facility' and cast(a.op_fac_hiearchy_final as integer) <= 3) then a.Encounter_Count
+   when (major_service_category =  'Outpatient Facility' and cast(a.op_fac_hiearchy_final as integer) > 3) then a.Service_Count
+   else NULL end) as COH_FINAL_UTIL
+from Combine_Tables a
+
+
+
