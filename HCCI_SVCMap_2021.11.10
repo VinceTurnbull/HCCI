@@ -1,3 +1,6 @@
+CREATE TABLE IF NOT EXISTS "testdb"."vt_sample_claimants_75kmbrs_adddsc" AS
+
+
 with sample_data as (  
 SELECT *
 from "testdb"."vt_sample_claimants_75kmbrs"
@@ -431,6 +434,8 @@ final_table as (
    when major_service_category = 'Professional Services' then unique_key_prof
    when major_service_category = 'Outpatient Facility' then concat(cast(service_from_date as varchar), member_ssn, provider_tin, dsc_with_hierarchy)
    else NULL end) as unique_key
+
+, (concat(cast(service_from_date as varchar), member_ssn, provider_tin, dsc_with_hierarchy)) unique_key_ungrouped 
 , (case 
    when major_service_category = 'Inpatient Facility' then final_COH_ADMIT_DATE
    when major_service_category = 'Professional Services' then NULL
@@ -448,24 +453,4 @@ from map_Final_DSC)
 /******************* testing, replace as needed***********/
 
 -- test claims, replace with export to wherever
-select major_service_category
-, DSC_with_Hierarchy
-, sum(allowed_amount) as claims
-from final_table
-group by 1,2
-order by 1,2
-                                                        
-   
- 
-
-  
-
-
-
-
-
-
-
-
-
-
+select * from  final_table                   
